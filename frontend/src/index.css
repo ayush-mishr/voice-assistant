@@ -1,0 +1,428 @@
+/* ─── CSS Custom Properties ────────────────────────────────────────────── */
+
+:root {
+  --color-bg: #000000;
+  --color-surface: #0a0a0a;
+  --color-border: #1a1a1a;
+  --color-border-active: #333333;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #888888;
+  --color-text-muted: #444444;
+  --color-accent: #ffffff;
+
+  --font-family: 'Inter', 'SF Pro Display', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  --font-size-xs: 11px;
+  --font-size-sm: 13px;
+  --font-size-base: 15px;
+  --font-size-lg: 18px;
+  --font-size-xl: 24px;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --letter-spacing-wide: 0.08em;
+  --letter-spacing-wider: 0.12em;
+}
+
+/* ─── Reset ────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* ─── Base ─────────────────────────────────────────────────────────────── */
+
+html, body {
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+/* ─── App Container ────────────────────────────────────────────────────── */
+
+#app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px 24px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+/* ─── Header ───────────────────────────────────────────────────────────── */
+
+.header {
+  text-align: center;
+  margin-bottom: 48px;
+  user-select: none;
+}
+
+.header h1 {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wider);
+  text-transform: uppercase;
+  color: var(--color-text-primary);
+  margin-bottom: 8px;
+}
+
+.header .subtitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: lowercase;
+  color: var(--color-text-muted);
+  transition: letter-spacing 0.3s ease, color 0.3s ease;
+}
+
+.header:hover .subtitle {
+  letter-spacing: 0.16em;
+  color: var(--color-text-secondary);
+}
+
+/* ─── Orb Container ────────────────────────────────────────────────────── */
+
+.orb-container {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 32px;
+}
+
+/* ─── The Orb ──────────────────────────────────────────────────────────── */
+
+.orb {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  position: relative;
+  transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+
+/* Idle State — static, subtle */
+.state-idle .orb {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+/* Listening State — pulse ring */
+.state-listening .orb {
+  border-color: rgba(255, 255, 255, 0.6);
+  box-shadow: 0 0 40px rgba(255, 255, 255, 0.03);
+}
+
+.state-listening .orb-pulse-ring {
+  display: block;
+}
+
+.orb-pulse-ring {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 120px;
+  height: 120px;
+  margin-top: -60px;
+  margin-left: -60px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  animation: pulse-ring 2s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+  pointer-events: none;
+}
+
+.orb-pulse-ring-2 {
+  animation-delay: 1s;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+/* Processing State — spinning border */
+.state-processing .orb {
+  border-color: transparent;
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 40deg,
+      rgba(255, 255, 255, 0.6) 120deg,
+      transparent 180deg,
+      transparent 220deg,
+      rgba(255, 255, 255, 0.3) 300deg,
+      transparent 360deg
+    );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #fff calc(100% - 1px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #fff calc(100% - 1px));
+  animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Speaking State — breathing glow */
+.state-speaking .orb {
+  border-color: rgba(255, 255, 255, 0.6);
+  animation: breathe 2s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(1);
+    box-shadow: 0 0 20px rgba(255, 255, 255, 0.02);
+  }
+  50% {
+    opacity: 1.0;
+    transform: scale(1.05);
+    box-shadow: 0 0 60px rgba(255, 255, 255, 0.06);
+  }
+}
+
+/* ─── Status Label ─────────────────────────────────────────────────────── */
+
+.status-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wider);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: 40px;
+  transition: opacity 0.2s ease, color 0.3s ease;
+  user-select: none;
+  height: 16px;
+}
+
+.status-label:hover {
+  color: var(--color-text-secondary);
+}
+
+.state-listening .status-label {
+  color: var(--color-text-secondary);
+}
+
+.state-processing .status-label {
+  color: var(--color-text-muted);
+}
+
+.state-speaking .status-label {
+  color: var(--color-text-secondary);
+}
+
+/* ─── Transcript Panel ─────────────────────────────────────────────────── */
+
+.transcript-panel {
+  width: 100%;
+  max-height: 240px;
+  min-height: 120px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  overflow-y: auto;
+  margin-bottom: 32px;
+  padding: 16px;
+  position: relative;
+}
+
+.transcript-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.transcript-panel::-webkit-scrollbar-track {
+  background: var(--color-surface);
+}
+
+.transcript-panel::-webkit-scrollbar-thumb {
+  background: var(--color-border-active);
+}
+
+.transcript-header {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wider);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.transcript-empty {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  font-style: italic;
+  text-align: center;
+  padding: 24px 0;
+}
+
+.transcript-entry {
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  padding: 6px 0;
+  animation: entry-in 0.3s ease forwards;
+  transition: background 0.15s ease;
+  padding-left: 8px;
+  padding-right: 8px;
+  margin: 0 -8px;
+  border-radius: 0;
+}
+
+.transcript-entry:hover {
+  background: #111111;
+}
+
+.transcript-entry .prefix {
+  color: var(--color-text-muted);
+  margin-right: 8px;
+  font-weight: var(--font-weight-medium);
+}
+
+.transcript-entry.role-user {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.transcript-entry.role-user .prefix {
+  color: var(--color-text-muted);
+}
+
+.transcript-entry.role-assistant {
+  font-family: var(--font-family);
+  color: var(--color-text-primary);
+}
+
+.transcript-entry.role-assistant .prefix {
+  color: var(--color-text-muted);
+}
+
+@keyframes entry-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ─── Action Button ────────────────────────────────────────────────────── */
+
+.action-btn {
+  background: transparent;
+  color: var(--color-text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  padding: 14px 48px;
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wider);
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-radius: 0;
+  outline: none;
+  user-select: none;
+}
+
+.action-btn:hover {
+  border-color: rgba(255, 255, 255, 1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.action-btn:active {
+  transform: scale(0.97);
+}
+
+.action-btn.active {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: var(--color-text-secondary);
+}
+
+.action-btn.active:hover {
+  border-color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.action-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ─── Error Message ────────────────────────────────────────────────────── */
+
+.error-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-active);
+  padding: 12px 24px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  max-width: 480px;
+  text-align: center;
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  z-index: 100;
+}
+
+.error-bar.visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
+/* ─── Connection Indicator ─────────────────────────────────────────────── */
+
+.connection-dot {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  transition: background 0.3s ease;
+}
+
+.connection-dot.connected {
+  background: var(--color-text-secondary);
+}
+
+/* ─── Footer ───────────────────────────────────────────────────────────── */
+
+.footer {
+  position: fixed;
+  bottom: 16px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  letter-spacing: var(--letter-spacing-wide);
+  user-select: none;
+}

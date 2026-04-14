@@ -109,24 +109,50 @@ class BedrockSession:
         self.is_active = False
         self.stream_response = None
         self.response_task: asyncio.Task | None = None
+        self.sender_task: asyncio.Task | None = None
         self.prompt_name = ""
         self.audio_content_name = ""
+        self.audio_buffer = bytearray()
+
+        # Outgoing message queue — decouples Bedrock receive loop from
+        # WebSocket send latency, matching Node.js fire-and-forget ws.send().
+        self._send_queue: asyncio.Queue = asyncio.Queue()
 
     # ── Send to browser ─────────────────────────────────────────────────
 
-    async def send_json(self, obj: dict):
-        """Send a JSON text message to the browser."""
+    async def _sender_loop(self):
+        """Dedicated coroutine that drains the send queue and writes to the
+        WebSocket. Runs independently so the Bedrock receive loop never blocks
+        on WebSocket back-pressure.
+
+        Important: send one queued item at a time in FIFO order. Aggressive
+        frame coalescing creates large bursty payloads that increase jitter on
+        the browser side and can sound like broken speech.
+        """
+        while True:
+            # Block until one item is available, then send immediately.
+            msg_type, data = await self._send_queue.get()
+
+            try:
+                if self.ws.client_state == WebSocketState.CONNECTED:
+                    if msg_type == "bytes":
+                        await self.ws.send_bytes(data)
+                    else:
+                        await self.ws.send_text(data)
+            except Exception:
+                pass
+
+    def send_json(self, obj: dict):
+        """Enqueue a JSON text message for the browser (non-blocking)."""
         try:
-            if self.ws.client_state == WebSocketState.CONNECTED:
-                await self.ws.send_text(json.dumps(obj))
+            self._send_queue.put_nowait(("text", json.dumps(obj)))
         except Exception:
             pass
 
-    async def send_audio(self, data: bytes):
-        """Send binary audio data to the browser."""
+    def send_audio(self, data: bytes):
+        """Enqueue binary audio data for the browser (non-blocking)."""
         try:
-            if self.ws.client_state == WebSocketState.CONNECTED:
-                await self.ws.send_bytes(data)
+            self._send_queue.put_nowait(("bytes", data))
         except Exception:
             pass
 
@@ -244,60 +270,104 @@ class BedrockSession:
     # ── Process Response Stream ─────────────────────────────────────────
 
     async def process_response_stream(self):
-        """Read events from Bedrock's output stream and relay to the browser."""
+        """Read events from Bedrock's output stream and relay to the browser.
+
+        Key design: audio chunks from a single receive() are accumulated into
+        one batch and enqueued as a single item.  This produces fewer, larger
+        WebSocket frames — matching the implicit batching that Node.js gets
+        from its synchronous ws.send() calls inside a single event callback.
+        """
         try:
+            # Obtain the output stream handle once
+            output = await self.stream_response.await_output()
+            output_stream = output[1]
+            
+            decoder = json.JSONDecoder()
+            event_buffer = ""
+
             while self.is_active and self.stream_response is not None:
                 try:
-                    output = await self.stream_response.await_output()
-                    result = await output[1].receive()
+                    result = await output_stream.receive()
 
                     if result.value and result.value.bytes_:
                         decoded = result.value.bytes_.decode("utf-8")
-                        try:
-                            parsed = json.loads(decoded)
-                        except json.JSONDecodeError:
-                            continue
+                        event_buffer += decoded
+                        
+                        # Accumulate all audio from this receive() into one batch
+                        audio_batch = bytearray()
 
-                        event = parsed.get("event")
-                        if not event:
-                            continue
+                        pos = 0
+                        while pos < len(event_buffer):
+                            sub_buffer = event_buffer[pos:]
+                            stripped = sub_buffer.lstrip()
+                            if not stripped:
+                                pos = len(event_buffer)
+                                break
+                            
+                            whitespace_len = len(sub_buffer) - len(stripped)
+                            pos += whitespace_len
+                            
+                            try:
+                                parsed, parsed_len = decoder.raw_decode(event_buffer[pos:])
+                                pos += parsed_len
+                                
+                                event = parsed.get("event")
+                                if not event:
+                                    continue
+                                
+                                # Audio output — stream audio chunks as they arrive for low latency.
+                                if "audioOutput" in event and event["audioOutput"].get("content"):
+                                    audio_batch.extend(
+                                        base64.b64decode(event["audioOutput"]["content"])
+                                    )
 
-                        # Audio output from assistant
-                        if "audioOutput" in event and event["audioOutput"].get("content"):
-                            audio_bytes = base64.b64decode(event["audioOutput"]["content"])
-                            await self.send_audio(audio_bytes)
+                                # Text output (assistant response text)
+                                if "textOutput" in event and event["textOutput"].get("content"):
+                                    self.send_json({
+                                        "type": "transcript",
+                                        "role": "assistant",
+                                        "text": event["textOutput"]["content"],
+                                    })
 
-                        # Text output (assistant response text)
-                        if "textOutput" in event and event["textOutput"].get("content"):
-                            await self.send_json({
-                                "type": "transcript",
-                                "role": "assistant",
-                                "text": event["textOutput"]["content"],
-                            })
+                                # Content start — track role changes
+                                if "contentStart" in event:
+                                    if event["contentStart"].get("role") == "ASSISTANT":
+                                        self.send_json({"type": "state", "value": "speaking"})
 
-                        # Content start — track role changes
-                        if "contentStart" in event:
-                            if event["contentStart"].get("role") == "ASSISTANT":
-                                await self.send_json({"type": "state", "value": "speaking"})
+                                # Content end — go back to listening
+                                if "contentEnd" in event:
+                                    if (
+                                        event["contentEnd"].get("type") != "TOOL"
+                                        and event["contentEnd"].get("role") != "USER"
+                                    ):
+                                        self.send_json({"type": "state", "value": "listening"})
 
-                        # Content end — go back to listening
-                        if "contentEnd" in event:
-                            if (
-                                event["contentEnd"].get("type") != "TOOL"
-                                and event["contentEnd"].get("role") != "USER"
-                            ):
-                                await self.send_json({"type": "state", "value": "listening"})
+                                # Errors from the model
+                                if "validationException" in event:
+                                    msg = event["validationException"].get("message", "Validation error")
+                                    logger.error(f"[bedrock] Validation error: {msg}")
+                                    self.send_json({"type": "error", "message": msg})
 
-                        # Errors from the model
-                        if "validationException" in event:
-                            msg = event["validationException"].get("message", "Validation error")
-                            logger.error(f"[bedrock] Validation error: {msg}")
-                            await self.send_json({"type": "error", "message": msg})
+                                if "modelStreamErrorException" in event:
+                                    msg = event["modelStreamErrorException"].get("message", "Stream error")
+                                    logger.error(f"[bedrock] Stream error: {msg}")
+                                    self.send_json({"type": "error", "message": msg})
+                                    
+                            except json.JSONDecodeError:
+                                # Not enough data for a complete JSON object, wait for next chunk
+                                break
+                                
+                        # Keep only the unprocessed part of the buffer
+                        event_buffer = event_buffer[pos:]
 
-                        if "modelStreamErrorException" in event:
-                            msg = event["modelStreamErrorException"].get("message", "Stream error")
-                            logger.error(f"[bedrock] Stream error: {msg}")
-                            await self.send_json({"type": "error", "message": msg})
+                        # Flush the accumulated audio batch as ONE enqueue
+                        if audio_batch:
+                            self.audio_buffer.extend(audio_batch)
+                            send_len = len(self.audio_buffer) - (len(self.audio_buffer) % 2)
+                            if send_len > 0:
+                                chunk = bytes(self.audio_buffer[:send_len])
+                                self.audio_buffer = self.audio_buffer[send_len:]
+                                self.send_audio(chunk)
 
                 except StopAsyncIteration:
                     break
@@ -311,7 +381,7 @@ class BedrockSession:
             if self.is_active:
                 logger.error(f"[bedrock] Response stream error: {e}")
                 traceback.print_exc()
-                await self.send_json({"type": "error", "message": f"Stream interrupted: {e}"})
+                self.send_json({"type": "error", "message": f"Stream interrupted: {e}"})
 
         logger.info("[bedrock] Response stream ended")
 
@@ -343,7 +413,10 @@ class BedrockSession:
             await self.send_setup_events()
 
             logger.info("[bedrock] Stream established, processing responses...")
-            await self.send_json({"type": "state", "value": "listening"})
+            self.send_json({"type": "state", "value": "listening"})
+
+            # Start the dedicated sender loop (drains _send_queue → WebSocket)
+            self.sender_task = asyncio.create_task(self._sender_loop())
 
             # Start processing responses in background
             self.response_task = asyncio.create_task(self.process_response_stream())
@@ -351,7 +424,7 @@ class BedrockSession:
         except Exception as e:
             logger.error(f"[bedrock] Session error: {e}")
             traceback.print_exc()
-            await self.send_json({"type": "error", "message": f"Nova Sonic error: {e}"})
+            self.send_json({"type": "error", "message": f"Nova Sonic error: {e}"})
             self.is_active = False
             self.stream_response = None
 
@@ -435,8 +508,17 @@ class BedrockSession:
             except (asyncio.CancelledError, Exception):
                 pass
 
+        # Cancel sender task
+        if self.sender_task and not self.sender_task.done():
+            self.sender_task.cancel()
+            try:
+                await self.sender_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         self.stream_response = None
         self.response_task = None
+        self.sender_task = None
         logger.info("[bedrock] Session stopped")
 
 
@@ -467,8 +549,9 @@ async def websocket_endpoint(ws: WebSocket):
                             # Run in background so it doesn't block the WS loop
                             asyncio.create_task(session.start())
                         elif msg_type == "session_stop":
+                            # Send idle immediately; sender loop is still alive here.
+                            session.send_json({"type": "state", "value": "idle"})
                             await session.stop()
-                            await session.send_json({"type": "state", "value": "idle"})
                         else:
                             logger.info(f"[ws] Unknown message type: {msg_type}")
 

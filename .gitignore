@@ -9,3 +9,6 @@ __pycache__/
 *.db
 *.zip
 *.DS_Store
+test_boto.py
+test_cred.py
+test_ws.py

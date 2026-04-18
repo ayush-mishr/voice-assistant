@@ -17,10 +17,14 @@ import base64
 import asyncio
 import logging
 import traceback
+import boto3
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketState
+
+from auth import auth_router, init_db
 
 from aws_sdk_bedrock_runtime.client import (
     BedrockRuntimeClient,
@@ -33,12 +37,25 @@ from aws_sdk_bedrock_runtime.models import (
 from aws_sdk_bedrock_runtime.config import Config
 from smithy_aws_core.identity.environment import EnvironmentCredentialsResolver
 
+
 # ─── Load .env ────────────────────────────────────────────────────────────────
 
 # Resolve .env relative to this file's directory (not CWD, since uvicorn may
 # run from the project root while the .env lives in backend/)
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_THIS_DIR, ".env"))
+
+# ─── Resolve AWS Credentials (works locally via .env AND in ECS via Task Role)
+# boto3 auto-discovers creds from env vars, ~/.aws, ECS metadata, etc.
+# We then inject them into os.environ so EnvironmentCredentialsResolver can read them.
+_boto_session = boto3.Session(region_name=os.getenv("AWS_REGION", "us-east-1"))
+_boto_creds = _boto_session.get_credentials()
+if _boto_creds:
+    _frozen = _boto_creds.get_frozen_credentials()
+    os.environ["AWS_ACCESS_KEY_ID"] = _frozen.access_key
+    os.environ["AWS_SECRET_ACCESS_KEY"] = _frozen.secret_key
+    if _frozen.token:
+        os.environ["AWS_SESSION_TOKEN"] = _frozen.token
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -86,11 +103,39 @@ logger = logging.getLogger("voice-server")
 
 app = FastAPI(title="Voice AI Assistant")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth_router, prefix="/api", tags=["auth"])
+
+@app.middleware("http")
+async def debug_headers_middleware(request, call_next):
+    if request.url.path == "/ws":
+        logger.info(f"[DEBUG] Incoming HTTP request to {request.url.path}")
+        logger.info(f"[DEBUG] Headers: {dict(request.headers)}")
+    return await call_next(request)
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint required by AWS ALB and Docker."""
+    return {"status": "healthy", "service": "voice-assistant-backend"}
+
 
 # ─── Bedrock Client (module-level singleton) ─────────────────────────────────
 
 def create_bedrock_client() -> BedrockRuntimeClient:
-    """Create a Bedrock Runtime client using environment credentials."""
+    """Create a Bedrock Runtime client.
+    
+    Credentials are resolved by EnvironmentCredentialsResolver which reads
+    AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN from env vars.
+    These are set at module load time by boto3 (which auto-discovers from .env
+    locally or ECS Task Role in production).
+    """
     config = Config(
         endpoint_uri=f"https://bedrock-runtime.{AWS_REGION}.amazonaws.com",
         region=AWS_REGION,
@@ -122,25 +167,45 @@ class BedrockSession:
 
     async def _sender_loop(self):
         """Dedicated coroutine that drains the send queue and writes to the
-        WebSocket. Runs independently so the Bedrock receive loop never blocks
-        on WebSocket back-pressure.
+        WebSocket.  Runs independently so the Bedrock receive loop never
+        blocks on WebSocket back-pressure.
 
-        Important: send one queued item at a time in FIFO order. Aggressive
-        frame coalescing creates large bursty payloads that increase jitter on
-        the browser side and can sound like broken speech.
+        Key optimisation: on each iteration we drain ALL available items from
+        the queue and merge consecutive audio (bytes) entries into a single
+        WebSocket frame.  This mimics Node.js's behaviour where multiple
+        synchronous ws.send(buffer) calls are coalesced by the kernel into
+        fewer TCP segments, reducing per-frame overhead and event-loop yields.
         """
         while True:
-            # Block until one item is available, then send immediately.
-            msg_type, data = await self._send_queue.get()
+            # Block until at least one item is available
+            first = await self._send_queue.get()
+            items = [first]
 
-            try:
-                if self.ws.client_state == WebSocketState.CONNECTED:
-                    if msg_type == "bytes":
-                        await self.ws.send_bytes(data)
-                    else:
-                        await self.ws.send_text(data)
-            except Exception:
-                pass
+            # Drain everything currently queued (non-blocking)
+            while not self._send_queue.empty():
+                try:
+                    items.append(self._send_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+
+            # Merge consecutive "bytes" items to reduce WebSocket writes
+            merged = []
+            for msg_type, data in items:
+                if msg_type == "bytes" and merged and merged[-1][0] == "bytes":
+                    merged[-1] = ("bytes", merged[-1][1] + data)
+                else:
+                    merged.append((msg_type, data))
+
+            # Send the merged batch
+            for msg_type, data in merged:
+                try:
+                    if self.ws.client_state == WebSocketState.CONNECTED:
+                        if msg_type == "bytes":
+                            await self.ws.send_bytes(data)
+                        else:
+                            await self.ws.send_text(data)
+                except Exception:
+                    pass
 
     def send_json(self, obj: dict):
         """Enqueue a JSON text message for the browser (non-blocking)."""
@@ -315,7 +380,7 @@ class BedrockSession:
                                 if not event:
                                     continue
                                 
-                                # Audio output — stream audio chunks as they arrive for low latency.
+                                # Audio output — accumulate into batch
                                 if "audioOutput" in event and event["audioOutput"].get("content"):
                                     audio_batch.extend(
                                         base64.b64decode(event["audioOutput"]["content"])
@@ -549,9 +614,8 @@ async def websocket_endpoint(ws: WebSocket):
                             # Run in background so it doesn't block the WS loop
                             asyncio.create_task(session.start())
                         elif msg_type == "session_stop":
-                            # Send idle immediately; sender loop is still alive here.
-                            session.send_json({"type": "state", "value": "idle"})
                             await session.stop()
+                            session.send_json({"type": "state", "value": "idle"})
                         else:
                             logger.info(f"[ws] Unknown message type: {msg_type}")
 
@@ -574,6 +638,7 @@ async def websocket_endpoint(ws: WebSocket):
 
 @app.on_event("startup")
 async def startup_banner():
+    init_db()
     logger.info(f"""
   ╔══════════════════════════════════════════╗
   ║       VOICE AI ASSISTANT SERVER          ║

@@ -2,3 +2,10 @@ node_modules
 .env
 public/assets
 public/index.html
+__pycache__/
+*.pyc
+*.log
+*.txt
+*.db
+*.zip
+*.DS_Store

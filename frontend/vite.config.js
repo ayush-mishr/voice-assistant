@@ -9,7 +9,7 @@ export default defineConfig({
     proxy: {
       // Only proxy the /ws path to the backend — avoids intercepting Vite's own HMR WebSocket
       '/ws': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:8000',
         ws: true,
         changeOrigin: true,
         rewriteWsOrigin: true,
@@ -17,10 +17,15 @@ export default defineConfig({
         configure: (proxy) => {
           proxy.on('error', (err) => {
             if (err.code === 'ECONNREFUSED') {
-              console.warn('[vite proxy] Backend not reachable yet (ECONNREFUSED) — is it running on port 3000?');
+              console.warn('[vite proxy] Backend not reachable yet (ECONNREFUSED) — is it running on port 8000?');
             }
           });
         },
+      },
+      // Proxy /api requests to the FastAPI backend
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
       },
     },
   },

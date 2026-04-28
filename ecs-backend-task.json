@@ -2,8 +2,8 @@
   "family": "voice-assistant-backend",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
-  "cpu": "512",
-  "memory": "1024",
+  "cpu": "1024",
+  "memory": "2048",
   "executionRoleArn": "arn:aws:iam::269829599048:role/service-role/ecsTaskExecutionRole",
   "taskRoleArn": "arn:aws:iam::269829599048:role/ecsVoiceAssistantTaskRole",
   "containerDefinitions": [
@@ -20,7 +20,9 @@
       "environment": [
         { "name": "PORT", "value": "3000" },
         { "name": "AWS_REGION", "value": "us-east-1" },
-        { "name": "AWS_DEFAULT_REGION", "value": "us-east-1" }
+        { "name": "AWS_DEFAULT_REGION", "value": "us-east-1" },
+        { "name": "S3_BUCKET_NAME", "value": "voice-assistant-documents" },
+        { "name": "FAISS_INDEX_PATH", "value": "/app/faiss_data" }
       ],
       "healthCheck": {
         "command": ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:3000/health')\" || exit 1"],

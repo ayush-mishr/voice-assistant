@@ -559,6 +559,231 @@ html, body, #root {
   background: var(--color-text-secondary);
 }
 
+
+
+/* ─── Job Description Uploader ─────────────────────────────────────────── */
+
+.jd-uploader {
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.jd-uploader-header {
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.jd-uploader-subtitle {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-bottom: 12px;
+}
+
+/* Active JD indicator */
+.jd-active-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(80, 200, 120, 0.06);
+  border: 1px solid rgba(80, 200, 120, 0.15);
+  margin-bottom: 12px;
+  animation: entry-in 0.3s ease forwards;
+}
+
+.jd-active-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(80, 200, 120);
+  flex-shrink: 0;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.jd-active-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jd-clear-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  transition: color 0.2s;
+  line-height: 1;
+}
+
+.jd-clear-btn:hover {
+  color: var(--color-text-primary);
+}
+
+/* Tab buttons */
+.jd-tab-buttons {
+  display: flex;
+  gap: 0;
+  margin-bottom: 10px;
+}
+
+.jd-tab {
+  flex: 1;
+  padding: 7px 0;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-family: inherit;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+  outline: none;
+}
+
+.jd-tab:first-child {
+  border-right: none;
+}
+
+.jd-tab:hover {
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.jd-tab.active {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-active);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* File upload */
+.jd-upload-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.jd-file-label {
+  display: block;
+  padding: 10px 14px;
+  border: 1px dashed var(--color-border-active);
+  text-align: center;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jd-file-label:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.jd-file-label input[type="file"] {
+  display: none;
+}
+
+.jd-file-hint {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+/* URL input */
+.jd-url-section {
+  display: flex;
+  gap: 6px;
+}
+
+.jd-url-input {
+  flex: 1;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color 0.2s;
+  min-width: 0;
+}
+
+.jd-url-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.jd-url-input:focus {
+  border-color: var(--color-border-active);
+}
+
+.jd-url-btn {
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px solid var(--color-border-active);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-family: inherit;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+  outline: none;
+  white-space: nowrap;
+}
+
+.jd-url-btn:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.jd-url-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Status message */
+.jd-status {
+  margin-top: 8px;
+  font-size: var(--font-size-xs);
+  padding: 6px 10px;
+  animation: entry-in 0.3s ease forwards;
+}
+
+.jd-status.success {
+  color: rgb(80, 200, 120);
+  background: rgba(80, 200, 120, 0.06);
+  border: 1px solid rgba(80, 200, 120, 0.12);
+}
+
+.jd-status.error {
+  color: rgb(220, 100, 100);
+  background: rgba(220, 100, 100, 0.06);
+  border: 1px solid rgba(220, 100, 100, 0.12);
+}
+
 /* ─── Footer ───────────────────────────────────────────────────────────── */
 
 .footer {

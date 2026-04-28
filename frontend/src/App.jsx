@@ -6,6 +6,7 @@ import useAudioPlayback from './hooks/useAudioPlayback';
 import Orb from './components/Orb';
 import TranscriptPanel from './components/TranscriptPanel';
 import ErrorBar from './components/ErrorBar';
+import JobDescriptionUploader from './components/JobDescriptionUploader';
 import AuthPage from './AuthPage';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -33,8 +34,7 @@ const BUTTON_LABELS = {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-let entryIdCounter = 0;
-let historyIdCounter = 0;
+// Counters removed in favor of crypto.randomUUID()
 
 const parseUsername = (token) => {
   if (!token) return 'User';
@@ -95,6 +95,7 @@ export default function App() {
     localStorage.setItem(historyKey, JSON.stringify(chatHistory));
   }, [chatHistory, historyKey]);
 
+
   // ── Error display ────────────────────────────────────────────────────────
 
   const showError = useCallback((message) => {
@@ -126,7 +127,7 @@ export default function App() {
       return;
     }
 
-    const id = ++entryIdCounter;
+    const id = crypto.randomUUID();
 
     if (role === 'assistant') {
       lastAssistantIdRef.current = id;
@@ -175,8 +176,8 @@ export default function App() {
       return;
     }
 
-    // Tell server to start Bedrock session
-    sendJSON({ type: 'session_start' });
+    // Tell server to start Bedrock session (include token for user identification)
+    sendJSON({ type: 'session_start', token: localStorage.getItem('jwtToken') });
     setCurrentState(STATES.LISTENING);
   }, [clearTranscript, startMicrophone, sendJSON]);
 
@@ -194,7 +195,7 @@ export default function App() {
     const currentEntries = transcriptEntriesRef.current;
     if (currentEntries.length > 0) {
       const historyEntry = {
-        id: ++historyIdCounter,
+        id: crypto.randomUUID(),
         timestamp: new Date(),
         entries: [...currentEntries],
         preview: currentEntries.find((e) => e.role === 'user')?.text
@@ -288,9 +289,9 @@ export default function App() {
               {chatHistory.length === 0 ? (
                 <div className="history-empty">No conversations yet</div>
               ) : (
-                chatHistory.map((item) => (
+                chatHistory.map((item, index) => (
                   <div
-                    key={item.id}
+                    key={`${item.id}-${index}`}
                     className={`history-item${selectedHistoryId === item.id ? ' active' : ''}`}
                     onClick={() => {
                       if (!isSessionActive) {
@@ -315,6 +316,9 @@ export default function App() {
                 ))
               )}
             </div>
+
+            {/* Job Description Uploader */}
+            <JobDescriptionUploader authToken={authToken} />
           </div>
 
           {/* Main Controls Area */}

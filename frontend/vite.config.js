@@ -5,11 +5,12 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    host: 'localhost',
+    port: 3000,
     proxy: {
       // Only proxy the /ws path to the backend — avoids intercepting Vite's own HMR WebSocket
       '/ws': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         ws: true,
         changeOrigin: true,
         rewriteWsOrigin: true,
@@ -24,7 +25,7 @@ export default defineConfig({
       },
       // Proxy /api requests to the FastAPI backend
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },

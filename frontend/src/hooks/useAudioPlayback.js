@@ -28,8 +28,9 @@ export default function useAudioPlayback() {
   const pendingChunksRef = useRef([]);
   const prebufferSamplesRef = useRef(0);
 
-  // Keep a short lead buffer for responsiveness while still absorbing jitter.
-  const PREBUFFER_SECONDS = 0.05;
+  // Keep a lead buffer to absorb network jitter and event-loop delays.
+  // 800ms gives solid headroom for Python/asyncio backend latency spikes.
+  const PREBUFFER_SECONDS = 0.8;
 
   /**
    * Create the AudioContext + AudioWorklet processor (once per session).
@@ -53,9 +54,9 @@ export default function useAudioPlayback() {
           this._current = null;    // chunk currently being read
           this._offset = 0;        // read position within _current
           this._queuedSamples = 0; // total samples buffered across queue/current
-          this._isPrimed = false;  // begin playback only after small lead buffer
-          this._prebufferSamples = 1200; // default ~50ms at 24kHz
-          this._maxPrebufferSamples = 7200; // hard cap ~300ms at 24kHz
+          this._isPrimed = false;  // begin playback only after lead buffer fills
+          this._prebufferSamples = 19200; // default ~800ms at 24kHz
+          this._maxPrebufferSamples = 48000; // hard cap ~2s at 24kHz
 
           this.port.onmessage = (e) => {
             if (e.data === null) {
@@ -97,14 +98,11 @@ export default function useAudioPlayback() {
             // Advance to next chunk if current one is exhausted
             if (!this._current || this._offset >= this._current.length) {
               if (this._chunks.length === 0) {
-                // Buffer underrun — fill the rest with silence
+                // Buffer underrun — fill the rest with silence but stay primed.
+                // NOT resetting _isPrimed here so playback resumes immediately
+                // when the next chunk arrives (no re-buffering delay).
                 while (i < out.length) out[i++] = 0;
                 this._current = null;
-                // Adaptively increase future priming after each underrun.
-                // This keeps latency low when network is stable, but stabilizes
-                // playback automatically under jitter.
-                this._prebufferSamples = Math.min(this._prebufferSamples + 240, this._maxPrebufferSamples);
-                this._isPrimed = false;
                 return true;
               }
               this._current = this._chunks.shift();

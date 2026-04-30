@@ -1,0 +1,5 @@
+﻿[
+    "2026-04-26 11:43:37,966 [DocProcessor] Generating embeddings for 8 chunks...",
+    "2026-04-26 11:43:39,192 [Embed] Generated 8 embeddings total",
+    "2026-04-26 11:43:39,193 [LTM] Saved index (8 vectors) to /app/faiss_data",
+    "2026-04-26 11:43:39,193 [LTM] Added 8 chunks from 'osho_facts.txt'. Total vectors: 8"

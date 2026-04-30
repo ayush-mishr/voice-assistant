@@ -209,6 +209,7 @@ class AgentCore:
         """
         with tracer.start_as_current_span("process_query") as span:
             span.set_attribute("session_id", session_id)
+            span.add_event("Query Received", attributes={"query.text": query}) # Added as a log in the trace
             logger.info(f"[AgentCore] Processing query: '{query[:80]}…'")
 
             # ── Step 1: Check Short-Term Memory ───────────────────────────────
@@ -218,6 +219,7 @@ class AgentCore:
                 entry, score = stm_result
                 span.set_attribute("memory.source", "short_term")
                 span.set_attribute("memory.confidence", score)
+                span.add_event("Short Term Memory Hit", attributes={"score": score}) # Log the event in the trace
                 logger.info(
                     f"[AgentCore] → SHORT-TERM HIT (score: {score:.3f})"
                 )

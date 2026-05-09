@@ -35,6 +35,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
+    address = Column(String, default="123 Dummy St, Cityville")
 
 class UserCreate(BaseModel):
     username: str
@@ -92,6 +93,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         raise credentials_exception
     return user
 
+def update_user_address(db: Session, username: str, new_address: str) -> bool:
+    user = db.query(User).filter(User.username == username).first()
+    if user:
+        user.address = new_address
+        db.commit()
+        return True
+    return False
+
 # ─── Router and Endpoints ───────────────────────────────────────────────────
 
 auth_router = APIRouter()
@@ -132,7 +141,10 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
 @auth_router.get("/me")
 def read_users_me(current_user: User = Depends(get_current_user)):
-    return {"username": current_user.username}
+    return {
+        "username": current_user.username,
+        "address": current_user.address
+    }
 
 # ─── Startup Logic ──────────────────────────────────────────────────────────
 
@@ -143,10 +155,20 @@ def init_db():
     # Check if database is empty, seed initial users
     count = db.query(User).count()
     if count == 0:
+        addresses = [
+            "123 Main St, Springfield",
+            "456 Elm St, Shelbyville",
+            "789 Oak Ave, Capital City",
+            "101 Maple Dr, Ogdenville"
+        ]
         for i in range(1, 5):
             username = f"user{i}"
             hashed_pw = get_password_hash(f"pass{i}")
-            new_user = User(username=username, hashed_password=hashed_pw)
+            new_user = User(
+                username=username, 
+                hashed_password=hashed_pw,
+                address=addresses[i-1]
+            )
             db.add(new_user)
         db.commit()
     db.close()

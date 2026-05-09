@@ -155,8 +155,18 @@ export default function App() {
 
   // ── Audio capture ───────────────────────────────────────────────────────
 
+  const handleSpeechDetected = useCallback(() => {
+    if (currentState === STATES.SPEAKING) {
+      console.log("Interrupting AI...");
+      stopPlayback();
+      setCurrentState(STATES.LISTENING);
+      sendJSON({ type: 'interrupt' });
+    }
+  }, [currentState, stopPlayback, sendJSON]);
+
   const { startMicrophone, stopMicrophone } = useAudioCapture(
     (pcmBuffer) => sendBinary(pcmBuffer),
+    handleSpeechDetected,
     (errorMsg) => showError(errorMsg)
   );
 

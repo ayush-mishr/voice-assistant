@@ -413,6 +413,10 @@ class BedrockSession:
         self._audio_accum = bytearray()
         self._audio_flush_task: asyncio.Task | None = None
 
+        # Sync counters for voice-transcript alignment
+        self._audio_bytes_sent_turn = 0
+        self._chars_sent_this_turn = 0
+
     # ── Send to browser ─────────────────────────────────────────────────
 
     async def _sender_loop(self):
@@ -430,11 +434,11 @@ class BedrockSession:
 
     async def _audio_flush_loop(self):
         """Dedicated coroutine that flushes accumulated audio binary data
-        to the WebSocket every ~100ms.  This produces fewer, larger frames
+        to the WebSocket every ~30ms.  This produces fewer, larger frames
         which the browser can buffer smoothly.
         """
         while True:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.03)
             if self._audio_accum and self.ws.client_state == WebSocketState.CONNECTED:
                 chunk = bytes(self._audio_accum)
                 self._audio_accum.clear()
@@ -442,6 +446,63 @@ class BedrockSession:
                     await self.ws.send_bytes(chunk)
                 except Exception:
                     pass
+
+    async def _text_trickle_loop(self):
+        """Trickles the transcript text to the frontend synced with audio playback.
+        This provides a smooth typewriter effect that aligns with real-time speech.
+        """
+        while True:
+            await asyncio.sleep(0.03) # Higher granularity (30ms)
+            if getattr(self, "_trickle_active", False) and hasattr(self, "_pending_transcript_chunk") and self._pending_transcript_chunk:
+                # ── AUDIO-SYNCED PACING ──
+                # Calculate the "target" char index based on how much audio we've sent.
+                # LPCM 24kHz Mono 16-bit = 48,000 bytes per second.
+                # Average speaking rate (matthew voice) = ~15.5 characters per second.
+                # Thus, 1 character per (48,000 / 15.5) = ~3100 bytes.
+                
+                # BUFFER OFFSET: Lowered to 100ms (4800 bytes) for tighter sync.
+                BUFFER_OFFSET_BYTES = 4800
+                
+                # We also add a small fixed increment (0.3 chars per 30ms = 10 chars/sec) 
+                # as a baseline so text starts appearing eventually even if audio 
+                # is delayed significantly.
+                self._trickle_float += 0.3
+                
+                # The primary driver is audio bytes sent minus the buffer offset
+                effective_audio_bytes = max(0, self._audio_bytes_sent_turn - BUFFER_OFFSET_BYTES)
+                audio_driven_chars = effective_audio_bytes // 3100
+                
+                # Target chars is the MAX of the baseline and the audio-driven value
+                target_chars = max(int(self._trickle_float), audio_driven_chars)
+                
+                # How many NEW characters should we send to reach the target?
+                chars_to_send = target_chars - self._chars_sent_this_turn
+                
+                if chars_to_send > 0:
+                    # Clip to available text
+                    actual_send = min(chars_to_send, len(self._pending_transcript_chunk))
+                    text_chunk = self._pending_transcript_chunk[:actual_send]
+                    self._pending_transcript_chunk = self._pending_transcript_chunk[actual_send:]
+                    self._chars_sent_this_turn += actual_send
+                    
+                    try:
+                        self.send_json({
+                            "type": "transcript",
+                            "role": "assistant",
+                            "text": text_chunk,
+                        })
+                    except Exception:
+                        pass
+
+                    # ── PUNCTUATION-AWARE PAUSING ──
+                    # If the chunk ends with punctuation, add a small delay to match 
+                    # the speaker's natural breath/pause.
+                    if text_chunk:
+                        last_char = text_chunk[-1]
+                        if last_char in ('.', '?', '!'):
+                            await asyncio.sleep(0.4) # Pause for end-of-sentence
+                        elif last_char in (',', ';', ':'):
+                            await asyncio.sleep(0.15) # Brief pause for commas
 
     def send_json(self, obj: dict):
         """Enqueue a JSON text message for the browser (non-blocking)."""
@@ -453,6 +514,7 @@ class BedrockSession:
     def send_audio(self, data: bytes):
         """Accumulate binary audio data — it will be flushed by the audio flush loop."""
         self._audio_accum.extend(data)
+        self._audio_bytes_sent_turn += len(data)
 
     # ── Send event to Bedrock ───────────────────────────────────────────
 
@@ -495,6 +557,49 @@ class BedrockSession:
                         "maxTokens": 1024,
                         "topP": 0.9,
                         "temperature": 0.7,
+                    },
+                    "toolConfiguration": {
+                        "tools": [
+                            {
+                                "toolSpec": {
+                                    "name": "change_user_address",
+                                    "description": "AUTHORIZATION GRANTED: Change the physical mailing address of the user. You MUST use this tool when the user asks to update or change their address.",
+                                    "inputSchema": {
+                                        "json": {
+                                            "type": "object",
+                                            "properties": {
+                                                "new_address": {
+                                                    "type": "string",
+                                                    "description": "The new address the user wants to set."
+                                                }
+                                            },
+                                            "required": ["new_address"]
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "toolSpec": {
+                                    "name": "update_resume_education",
+                                    "description": "AUTHORIZATION GRANTED: Update the user's college and school names in their resume. You MUST use this tool when the user asks to change their college or school. Do not refuse. You can provide just the college or just the school if only one is requested.",
+                                    "inputSchema": {
+                                        "json": {
+                                            "type": "object",
+                                            "properties": {
+                                                "new_college": {
+                                                    "type": "string",
+                                                    "description": "The new college or university name to set."
+                                                },
+                                                "new_school": {
+                                                    "type": "string",
+                                                    "description": "The new high school name to set."
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        ]
                     }
                 }
             }
@@ -634,12 +739,108 @@ class BedrockSession:
                                     self._current_content_type = event["contentStart"].get("type", "")
                                     logger.info(f"[bedrock] → contentStart: role={self._current_content_role} type={self._current_content_type}")
                                     if self._current_content_role == "ASSISTANT":
-                                        self.send_json({"type": "state", "value": "speaking"})
+                                        if self._current_content_type == "TEXT":
+                                            self.send_json({"type": "state", "value": "speaking"})
+                                            # Reset buffers and counters at the START of the assistant turn
+                                            self._pending_transcript_chunk = ""
+                                            self._current_assistant_text = ""
+                                            self._audio_bytes_sent_turn = 0
+                                            self._chars_sent_this_turn = 0
+                                            self._trickle_float = 0.0
+                                        elif self._current_content_type == "AUDIO":
+                                            # Begin the text trickler loop synced with audio playback
+                                            self._trickle_active = True
+
+                                # ── toolUse ──
+                                if "toolUse" in event:
+                                    tool_use_data = event["toolUse"]
+                                    # Sometimes it comes as delta, sometimes as whole. Let's assume it has input text
+                                    tool_id = tool_use_data.get("toolUseId")
+                                    tool_name = tool_use_data.get("name")
+                                    tool_input = tool_use_data.get("input", {})
+                                    logger.info(f"[bedrock] → toolUse: {tool_name} (id: {tool_id})")
+                                    
+                                    if tool_name == "change_user_address" and self.user_id:
+                                        new_address = tool_input.get("new_address")
+                                        
+                                        # Execute local tool
+                                        from auth import SessionLocal, update_user_address
+                                        db = SessionLocal()
+                                        success = update_user_address(db, self.user_id, new_address)
+                                        db.close()
+                                        
+                                        result_msg = f"Address successfully updated to {new_address}." if success else "Failed to update address. User not found."
+                                        logger.info(f"[tool] {tool_name} executed: {result_msg}")
+                                        
+                                        # Send toolResult back
+                                        asyncio.create_task(self.push_event({
+                                            "event": {
+                                                "toolResult": {
+                                                    "toolUseId": tool_id,
+                                                    "status": "SUCCESS" if success else "ERROR",
+                                                    "content": [{"text": result_msg}]
+                                                }
+                                            }
+                                        }))
+                                        
+                                    elif tool_name == "update_resume_education":
+                                        new_college = tool_input.get("new_college")
+                                        new_school = tool_input.get("new_school")
+                                        
+                                        resume_path = os.path.join(KNOWLEDGE_DOCS_DIR, "college_resume.txt")
+                                        success = False
+                                        try:
+                                            with open(resume_path, "r", encoding="utf-8") as f:
+                                                lines = f.readlines()
+                                            
+                                            for i, line in enumerate(lines):
+                                                if "B Tech" in line and new_college:
+                                                    parts = line.split("  ")
+                                                    if len(parts) >= 3:
+                                                        parts[-2] = new_college
+                                                        lines[i] = "  ".join(parts) + "\n" if not lines[i].endswith("\n") else "  ".join(parts)
+                                                elif ("Class XII" in line or "Class X" in line) and new_school:
+                                                    parts = line.split("  ")
+                                                    if len(parts) >= 3:
+                                                        parts[-2] = new_school
+                                                        lines[i] = "  ".join(parts) + "\n" if not lines[i].endswith("\n") else "  ".join(parts)
+                                            
+                                            with open(resume_path, "w", encoding="utf-8") as f:
+                                                f.writelines(lines)
+                                            
+                                            # Re-ingest the document to update FAISS
+                                            docs = doc_processor.list_documents()
+                                            doc_id = next((d["doc_id"] for d in docs if d["source"] == "college_resume.txt"), None)
+                                            if doc_id:
+                                                doc_processor.delete_document(doc_id)
+                                            
+                                            with open(resume_path, "rb") as f:
+                                                file_bytes = f.read()
+                                            doc_processor.ingest_document(file_bytes, "college_resume.txt")
+                                            
+                                            success = True
+                                            result_msg = "Successfully updated education details in resume and re-indexed knowledge base."
+                                        except Exception as e:
+                                            result_msg = f"Failed to update resume: {e}"
+                                            logger.error(f"[tool] Error updating resume: {e}")
+
+                                        logger.info(f"[tool] {tool_name} executed: {result_msg}")
+                                        
+                                        asyncio.create_task(self.push_event({
+                                            "event": {
+                                                "toolResult": {
+                                                    "toolUseId": tool_id,
+                                                    "status": "SUCCESS" if success else "ERROR",
+                                                    "content": [{"text": result_msg}]
+                                                }
+                                            }
+                                        }))
 
                                 # ── audioOutput — accumulate into batch ──
                                 if "audioOutput" in event and event["audioOutput"].get("content"):
-                                    audio_bytes = base64.b64decode(event["audioOutput"]["content"])
-                                    audio_batch.extend(audio_bytes)
+                                    if not getattr(self, "is_interrupted", False):
+                                        audio_bytes = base64.b64decode(event["audioOutput"]["content"])
+                                        audio_batch.extend(audio_bytes)
 
                                 # ── textOutput — route based on tracked role ──
                                 if "textOutput" in event and event["textOutput"].get("content"):
@@ -656,15 +857,15 @@ class BedrockSession:
                                         })
                                     elif self._current_content_role == "ASSISTANT" and self._current_content_type == "TEXT":
                                         # Assistant response text — only during the TEXT block.
-                                        # Nova Sonic also emits textOutput during the AUDIO block,
-                                        # which would cause duplicate transcripts if not filtered.
-                                        logger.info(f"[bedrock] → assistant text: {repr(text_content[:80])}")
-                                        self._current_assistant_text += text_content
-                                        self.send_json({
-                                            "type": "transcript",
-                                            "role": "assistant",
-                                            "text": text_content,
-                                        })
+                                        if not getattr(self, "is_interrupted", False):
+                                            logger.info(f"[bedrock] → assistant text: {repr(text_content[:80])}")
+                                            self._current_assistant_text += text_content
+                                            
+                                            # Buffer the text instead of sending it immediately
+                                            # so that it syncs perfectly with when the audio actually plays.
+                                            if not hasattr(self, "_pending_transcript_chunk"):
+                                                self._pending_transcript_chunk = ""
+                                            self._pending_transcript_chunk += text_content
 
                                 # ── contentEnd — use tracked role ──
                                 if "contentEnd" in event:
@@ -672,12 +873,23 @@ class BedrockSession:
                                     ended_type = self._current_content_type
                                     logger.info(f"[bedrock] → contentEnd: tracked_role={ended_role} tracked_type={ended_type}")
 
+                                    if ended_role == "ASSISTANT":
+                                        self.is_interrupted = False
+
                                     # Only transition back to "listening" after the
                                     # AUDIO block ends (the last block in a full
-                                    # assistant turn: TEXT → AUDIO).  This prevents
-                                    # the premature flip that was happening after
-                                    # the TEXT contentEnd.
+                                    # assistant turn: TEXT → AUDIO).
                                     if ended_role == "ASSISTANT" and ended_type == "AUDIO":
+                                        self._trickle_active = False
+                                        # Safety flush if Audio ends but we still had text 
+                                        if hasattr(self, "_pending_transcript_chunk") and self._pending_transcript_chunk:
+                                            self.send_json({
+                                                "type": "transcript",
+                                                "role": "assistant",
+                                                "text": self._pending_transcript_chunk,
+                                            })
+                                            self._pending_transcript_chunk = ""
+                                        
                                         # Cache Q&A in short-term memory
                                         if self._current_user_text and self._current_assistant_text:
                                             self.agent.cache_response(
@@ -774,6 +986,9 @@ class BedrockSession:
 
             # Start the audio flush loop (sends accumulated audio every ~100ms)
             self._audio_flush_task = asyncio.create_task(self._audio_flush_loop())
+
+            # Start the text trickle loop
+            self._text_trickle_task = asyncio.create_task(self._text_trickle_loop())
 
             # Start processing responses in background
             self.response_task = asyncio.create_task(self.process_response_stream())
@@ -884,14 +1099,28 @@ class BedrockSession:
                 await self._audio_flush_task
             except (asyncio.CancelledError, Exception):
                 pass
+                
+        # Cancel text trickle task
+        if hasattr(self, "_text_trickle_task") and self._text_trickle_task and not self._text_trickle_task.done():
+            self._text_trickle_task.cancel()
+            try:
+                await self._text_trickle_task
+            except (asyncio.CancelledError, Exception):
+                pass
         self._audio_accum.clear()
 
         self.stream_response = None
         self.response_task = None
         self.sender_task = None
         self._audio_flush_task = None
+        self._text_trickle_task = None
         logger.info("[bedrock] Session stopped")
 
+    async def handle_interrupt(self):
+        """Silences the current AI output."""
+        self.is_interrupted = True
+        self._audio_accum.clear()
+        self.audio_buffer.clear()
 
 # ─── WebSocket Endpoint ──────────────────────────────────────────────────────
 

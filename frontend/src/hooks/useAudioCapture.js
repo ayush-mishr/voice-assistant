@@ -8,7 +8,7 @@ import { useRef, useCallback } from 'react';
  * @param {function} onError   – called with error message string
  * @returns {{ startMicrophone, stopMicrophone }}
  */
-export default function useAudioCapture(onPCMData, onError) {
+export default function useAudioCapture(onPCMData, onSpeechDetected, onError) {
   const audioContextRef = useRef(null);
   const micStreamRef = useRef(null);
   const workletNodeRef = useRef(null);
@@ -16,6 +16,10 @@ export default function useAudioCapture(onPCMData, onError) {
   // Keep callback refs stable
   const onPCMDataRef = useRef(onPCMData);
   onPCMDataRef.current = onPCMData;
+  
+  const onSpeechDetectedRef = useRef(onSpeechDetected);
+  onSpeechDetectedRef.current = onSpeechDetected;
+
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
@@ -54,6 +58,17 @@ export default function useAudioCapture(onPCMData, onError) {
 
             const channel = input[0];
 
+            let sumSquares = 0;
+            for (let i = 0; i < channel.length; i++) {
+              sumSquares += channel[i] * channel[i];
+            }
+            const rms = Math.sqrt(sumSquares / channel.length);
+            
+            // Adjust threshold if needed (0.05 is usually good for near-field speech)
+            if (rms > 0.05) {
+              this.port.postMessage({ type: 'speech_detected' });
+            }
+
             for (let i = 0; i < channel.length; i++) {
               this._buffer[this._offset++] = channel[i];
 
@@ -88,6 +103,10 @@ export default function useAudioCapture(onPCMData, onError) {
       workletNodeRef.current = audioWorkletNode;
 
       audioWorkletNode.port.onmessage = (event) => {
+        if (event.data && event.data.type === 'speech_detected') {
+          onSpeechDetectedRef.current?.();
+          return;
+        }
         // Send PCM buffer directly to server as binary
         onPCMDataRef.current?.(event.data);
       };
